@@ -5,9 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
+	"sync"
 )
 
 // ANSI color codes
@@ -19,6 +22,8 @@ const (
 )
 
 func main() {
+
+	var wg sync.WaitGroup
 	// Parse command-line arguments
 	filepath := flag.String("f", "", "Path to the subdomains file")
 	flag.Parse()
@@ -52,9 +57,14 @@ func main() {
 			continue
 		}
 
+		// Check for subdomain takeover in azure services
+		wg.Add(1)
+		go azureSTO(subdomain, cname, status, &wg)
+
 		// Print results with ANSI colors
 		fmt.Printf("%sSubdomain: %s %s, %sCNAME: %s %s, %sStatus: %s%s\n", Red, subdomain, NC, Blue, cname, NC, Green, status, NC)
 	}
+	wg.Wait()
 }
 
 // getStatus gets the status from the dig output
@@ -78,4 +88,18 @@ func getStatus(subdomain string) (string, error) {
 		}
 	}
 	return status, nil
+}
+
+// function that check for subdomain takeover in azure services
+func azureSTO(subdomain, cname, status string, wg *sync.WaitGroup) {
+	defer wg.Done()
+	azureRegex := regexp.MustCompile(`(?i)^(?:[a-z0-9-]+\.)?(?:cloudapp\.net|azurewebsites\.net|cloudapp\.azure\.com)$`)
+
+	if strings.Contains(status, "NXDOMAIN") && azureRegex.MatchString(cname) {
+		url := fmt.Sprintf("https://%s", cname)
+		_, err := http.Get(url)
+		if err != nil {
+			fmt.Printf("[%v, %v, %v] Possibly Vulnerable to subdomain takeover vulnerability\n", subdomain, cname, status)
+		}
+	}
 }
