@@ -6,14 +6,15 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/parnurzeal/gorequest"
-	"github.com/spf13/cobra"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/parnurzeal/gorequest"
+	"github.com/spf13/cobra"
 
 	_ "github.com/mattn/go-sqlite3"
 )
