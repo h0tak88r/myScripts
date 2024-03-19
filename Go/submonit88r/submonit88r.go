@@ -9,11 +9,11 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"strings"
-	"time" // github.com/h0tak88r/submonit88r/pkg/sub88r
+	"sync"
+	"time"
 
-	"github.com/PuerkitoBio/goquery"
-	"github.com/parnurzeal/gorequest"
+	"github.com/h0tak88r/submonit88r/pkg/sub88r"
+
 	"github.com/spf13/cobra"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -63,7 +63,6 @@ func validateFlags() {
 }
 
 var rootCmdInstance *cobra.Command
-var notificationBuffer = make(chan string)
 var monitorInterval = 10 * time.Hour
 
 func printLogo() {
@@ -259,19 +258,36 @@ func getSubdomainsFromDB() []string {
 	return subdomains
 }
 
+// Fetch subdomains from different sources using subber package
 func fetchSubdomainsFromSources(domain string) []string {
-	var subdomains []string
+	var wg sync.WaitGroup
 
-	// Fetch subdomains from various sources
-	crtshSubdomains, _ := fetchSubdomainsFromCRTSH(domain)
-	subdomains = append(subdomains, fetchSubdomainsFromAlienvault(domain)...)
-	subdomains = append(subdomains, fetchSubdomainsFromAnubis(domain)...)
-	subdomains = append(subdomains, fetchSubdomainsFromHackerTarget(domain)...)
-	subdomains = append(subdomains, fetchSubdomainsFromRapiddns(domain)...)
-	subdomains = append(subdomains, fetchSubdomainsFromUrlscan(domain)...)
-	subdomains = append(subdomains, crtshSubdomains...)
+	// Create a Subber instance
+	subber := &sub88r.Subber{
+		Domain:  domain,
+		Results: &sub88r.Results{},
+	}
 
-	return subdomains
+	// Define a function to fetch subdomains from a source
+	fetch := func(fetchFunc func() error, sourceName string) {
+		wg.Add(1)
+		defer wg.Done()
+		fmt.Printf("[+] Getting Subdomains from %s...\n", sourceName)
+		if err := fetchFunc(); err != nil {
+			log.Fatalf("Error while getting subdomains from %s: %v\n", sourceName, err)
+		}
+	}
+
+	// Fetch subdomains from each source concurrently
+	go fetch(subber.Anubis, "Anubis jdlc.me")
+	go fetch(subber.UrlScan, "UrlScan")
+	go fetch(subber.CrtSh, "CrtSh")
+	go fetch(subber.HackerTarget, "HackerTarget")
+	go fetch(subber.Otx, "Otx")
+
+	wg.Wait()
+
+	return subber.GetAllSubdomains()
 }
 
 func difference(set1, set2 []string) []string {
@@ -327,225 +343,4 @@ func readDomainsFromFile(filename string) ([]string, error) {
 	}
 
 	return domains, nil
-}
-
-// Fetch subdomains from various sources
-func fetchSubdomainsFromCRTSH(domain string) ([]string, []string) {
-	var subdomains []string
-	var wildcardSubdomains []string
-
-	url := fmt.Sprintf("https://crt.sh/?q=%s&output=json", domain)
-	fmt.Printf("[#] Fetching Subdomains from crt.sh for %s\n", domain)
-
-	// Use gorequest to make HTTP request
-	request := gorequest.New()
-	_, body, errs := request.Get(url).End()
-
-	if errs != nil {
-		fmt.Printf("[!] Error fetching subdomains for domain %s from %s\n", domain, url)
-		return subdomains, wildcardSubdomains
-	}
-
-	// Parse JSON response
-	var entries []map[string]interface{}
-	err := json.Unmarshal([]byte(body), &entries)
-
-	if err != nil {
-		fmt.Printf("[!] Error decoding JSON for domain %s from %s\n", domain, url)
-		return subdomains, wildcardSubdomains
-	}
-
-	for _, entry := range entries {
-		nameValue, ok := entry["name_value"].(string)
-		if !ok {
-			continue
-		}
-
-		if strings.Contains(nameValue, "\n") {
-			subnameValues := strings.Split(nameValue, "\n")
-			for _, subname := range subnameValues {
-				subname = strings.TrimSpace(subname)
-				if subname != "" {
-					if strings.Contains(subname, "*") {
-						wildcardSubdomains = append(wildcardSubdomains, subname)
-					} else {
-						subdomains = append(subdomains, subname)
-					}
-				}
-			}
-		}
-	}
-
-	return subdomains, wildcardSubdomains
-}
-
-func fetchSubdomainsFromAlienvault(domain string) []string {
-	url := fmt.Sprintf("https://otx.alienvault.com/api/v1/indicators/domain/%s/passive_dns", domain)
-	fmt.Printf("[#] Fetching Subdomains from otx.alienvault.com for %s\n", domain)
-
-	// Use gorequest to make HTTP request
-	request := gorequest.New()
-	_, body, errs := request.Get(url).End()
-
-	if errs != nil {
-		fmt.Printf("[!] Error fetching data from %s: %v\n", url, errs)
-		return []string{}
-	}
-
-	// Parse JSON response
-	var data map[string]interface{}
-	err := json.Unmarshal([]byte(body), &data)
-
-	if err != nil {
-		fmt.Printf("[!] Error decoding JSON for domain %s from %s\n", domain, url)
-		return []string{}
-	}
-
-	subdomains := []string{}
-
-	if passiveDNS, ok := data["passive_dns"].([]interface{}); ok {
-		for _, entry := range passiveDNS {
-			if entryMap, ok := entry.(map[string]interface{}); ok {
-				if hostname, ok := entryMap["hostname"].(string); ok {
-					subdomains = append(subdomains, hostname)
-				}
-			}
-		}
-	}
-
-	if len(subdomains) == 0 {
-		fmt.Println("[X] No passive DNS data found.")
-	}
-
-	return subdomains
-}
-
-func fetchSubdomainsFromUrlscan(domain string) []string {
-	url := fmt.Sprintf("https://urlscan.io/api/v1/search/?q=%s", domain)
-	fmt.Printf("[#] Fetching Subdomains from urlscan.io for %s\n", domain)
-
-	// Use gorequest to make HTTP request
-	request := gorequest.New()
-	_, body, errs := request.Get(url).End()
-
-	if errs != nil {
-		fmt.Printf("[!] Error fetching data from %s: %v\n", url, errs)
-		return nil // Return an empty slice
-	}
-
-	// Parse JSON response
-	var data map[string]interface{}
-	err := json.Unmarshal([]byte(body), &data)
-
-	if err != nil {
-		fmt.Printf("[!] Error decoding JSON for domain %s from %s\n", domain, url)
-		return nil // Return an empty slice
-	}
-
-	subdomains := []string{}
-
-	if results, ok := data["results"].([]interface{}); ok {
-		for _, entry := range results {
-			if entryMap, ok := entry.(map[string]interface{}); ok {
-				if domain, ok := entryMap["domain"].(string); ok {
-					subdomains = append(subdomains, domain)
-				}
-			}
-		}
-	}
-
-	return subdomains
-}
-
-func fetchSubdomainsFromAnubis(domain string) []string {
-	url := fmt.Sprintf("https://jldc.me/anubis/subdomains/%s", domain)
-	fmt.Printf("[#] Fetching Subdomains from Anubis for %s\n", domain)
-
-	// Use gorequest to make HTTP request
-	request := gorequest.New()
-	_, body, errs := request.Get(url).End()
-
-	if errs != nil {
-		fmt.Printf("[!] Error fetching data from %s: %v\n", url, errs)
-		return []string{}
-	}
-
-	// Parse JSON response
-	var subdomains []string
-	err := json.Unmarshal([]byte(body), &subdomains)
-
-	if err != nil {
-		fmt.Printf("Anubis response for %s is not in the expected format.\n", domain)
-		return []string{}
-	}
-
-	return subdomains
-}
-func fetchSubdomainsFromHackerTarget(domain string) []string {
-	url := fmt.Sprintf("https://api.hackertarget.com/hostsearch/?q=%s", domain)
-	fmt.Printf("[#] Fetching Subdomains from hackertarget.com for %s\n", domain)
-
-	// Use gorequest to make HTTP request
-	request := gorequest.New()
-	_, body, errs := request.Get(url).End()
-
-	if errs != nil {
-		fmt.Printf("[!] Error fetching data from %s: %v\n", url, errs)
-		return []string{}
-	}
-
-	// Parse CSV response
-	scanner := bufio.NewScanner(strings.NewReader(body))
-	var subdomains []string
-
-	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Split(line, ",")
-		if len(fields) > 0 {
-			subdomains = append(subdomains, fields[0])
-		}
-	}
-
-	if len(subdomains) == 0 {
-		fmt.Println("[X] No subdomains found.")
-	}
-
-	return subdomains
-}
-
-func fetchSubdomainsFromRapiddns(domain string) []string {
-	url := fmt.Sprintf("https://rapiddns.io/subdomain/%s?full=1#result", domain)
-	fmt.Printf("[#] Fetching Subdomains from rapiddns.io for %s\n", domain)
-
-	// Use gorequest to make HTTP request
-	request := gorequest.New()
-	_, body, errs := request.Get(url).End()
-
-	if errs != nil {
-		fmt.Printf("[!] Error fetching data from %s: %v\n", url, errs)
-		return []string{}
-	}
-
-	// Parse HTML response
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(body))
-	if err != nil {
-		fmt.Printf("[X] Error parsing HTML for domain %s from %s: %v\n", domain, url, err)
-		return []string{}
-	}
-
-	subdomains := []string{}
-	websiteTable := doc.Find("table.table-striped").First()
-
-	if websiteTable.Length() > 0 {
-		websiteTable.Find("tbody").Each(func(_ int, tbody *goquery.Selection) {
-			tbody.Find("tr").Each(func(_ int, tr *goquery.Selection) {
-				subdomain := tr.Find("td").First().Text()
-				subdomains = append(subdomains, subdomain)
-			})
-		})
-	} else {
-		fmt.Println("[X] No table element found on the page.")
-	}
-
-	return subdomains
 }
