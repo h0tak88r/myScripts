@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-
+	// First of all Print the logo :)
 	runner.PrintLogo()
 
 	// Define flag variables
