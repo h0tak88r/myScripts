@@ -12,7 +12,7 @@ require (
 	github.com/google/go-cmp v0.5.6 // indirect
 	github.com/kennygrant/sanitize v1.2.4 // indirect
 	github.com/saintfish/chardet v0.0.0-20230101081208-5e3ef4b5456d // indirect
-	github.com/stretchr/testify v1.7.0 // indirect
+	github.com/stretchr/testify v1.9.0 // indirect
 	github.com/temoto/robotstxt v1.1.2 // indirect
 	golang.org/x/net v0.22.0 // indirect
 	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
